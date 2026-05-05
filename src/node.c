@@ -231,11 +231,6 @@ int main(int argc, char **argv) {
                     if (changed) {
                         routing_forward_lsa(router, sock, buf,
                                             from_host, from_port);
-                        /* Re-advertise ourselves so the new node learns
-                           about us immediately rather than waiting for
-                           the next scheduled flood tick. */
-                        routing_advertise(router, sock);
-                        last_lsa_ms = t;
                         if (converged) routing_recompute(router);
                     }
                 } else if (strncmp(buf, "DATA|", 5) == 0) {

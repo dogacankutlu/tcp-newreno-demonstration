@@ -13,11 +13,18 @@ const char *tcp_state_name(tcp_state_t st) {
     return "?";
 }
 
+static void banner(const char *msg) {
+    printf("\n  +----------------------------------------------------+\n");
+    printf("  |  %-50s|\n", msg);
+    printf("  +----------------------------------------------------+\n");
+    fflush(stdout);
+}
+
 static void log_line(const tcp_sender_t *s, const char *event) {
-    printf("  cwnd=%-5.2f ssthresh=%-3.0f state=%s snd_una=%-3d snd_nxt=%-3d "
-           "dup_acks=%d  | %s\n",
+    printf("  cwnd=%-5.2f ssthresh=%-2.0f state=%s snd_una=%-3d snd_nxt=%-3d"
+           "  | %s\n",
            s->cwnd, s->ssthresh, tcp_state_name(s->state),
-           s->snd_una, s->snd_nxt, s->dup_acks, event);
+           s->snd_una, s->snd_nxt, event);
     fflush(stdout);
 }
 
@@ -38,25 +45,25 @@ void tcp_sender_start(tcp_sender_t *s,
     if (total > TCP_MAX_SEGS - 1) total = TCP_MAX_SEGS - 1;
     s->total_segs = total;
 
-    s->snd_una        = 1;
-    s->snd_nxt        = 1;
-    s->cwnd           = 1.0;
-    s->init_ssthresh  = 16;
-    s->ssthresh       = s->init_ssthresh;
-    s->state          = TCP_SS;
-    s->dup_acks       = 0;
-    s->recover        = 0;
-    s->rto_ms         = 800;
-    s->acked_pkts     = 0;
+    s->snd_una       = 1;
+    s->snd_nxt       = 1;
+    s->cwnd          = 1.0;
+    s->init_ssthresh = 16;
+    s->ssthresh      = s->init_ssthresh;
+    s->state         = TCP_SS;
+    s->dup_acks      = 0;
+    s->recover       = 0;
+    s->rto_ms        = 800;
+    s->acked_pkts    = 0;
 
-    for (int i = 0; i < n_drop && i < TCP_MAX_DROP; i++) {
+    for (int i = 0; i < n_drop && i < TCP_MAX_DROP; i++)
         s->drop_seqs[s->n_drop++] = drop_seqs[i];
-    }
 
-    char ev[64];
-    snprintf(ev, sizeof(ev),
-             "START total=%d ssthresh=%d", total, s->init_ssthresh);
-    log_line(s, ev);
+    printf("\n  Sending %d segments to %s  (ssthresh=%d, cwnd starts at 1)\n",
+           total, dest, s->init_ssthresh);
+    printf("  States:  SS=Slow Start  CA=Congestion Avoidance  "
+           "FR=Fast Recovery\n\n");
+    fflush(stdout);
 }
 
 static int should_drop(tcp_sender_t *s, int seq) {
@@ -88,9 +95,10 @@ void tcp_sender_pump(tcp_sender_t *s, long now_ms,
         send_segment(seq, dropped, user);
 
         char ev[64];
-        snprintf(ev, sizeof(ev),
-                 dropped ? "TX  seq=%d (DROPPED for demo)" : "TX  seq=%d",
-                 seq);
+        if (dropped)
+            snprintf(ev, sizeof(ev), "TX  seg=%-3d  << LOST (simulated) >>", seq);
+        else
+            snprintf(ev, sizeof(ev), "TX  seg=%-3d", seq);
         log_line(s, ev);
     }
 }
@@ -103,16 +111,16 @@ int tcp_sender_check_timeout(tcp_sender_t *s, long now_ms) {
     long age = now_ms - s->send_time_ms[s->snd_una];
     if (age < s->rto_ms) return 0;
 
-    /* Timeout: NewReno still collapses cwnd to 1 and re-enters slow start. */
-    s->ssthresh  = (s->cwnd / 2.0 < 2.0) ? 2.0 : (s->cwnd / 2.0);
-    s->cwnd      = 1.0;
-    s->state     = TCP_SS;
-    s->dup_acks  = 0;
-    s->snd_nxt   = s->snd_una;       /* abandon anything past the timer */
+    s->ssthresh = (s->cwnd / 2.0 < 2.0) ? 2.0 : (s->cwnd / 2.0);
+    s->cwnd     = 1.0;
+    s->state    = TCP_SS;
+    s->dup_acks = 0;
+    s->snd_nxt  = s->snd_una;
 
+    banner("TIMEOUT  ->  cwnd=1,  ssthresh halved,  Slow Start restart");
     char ev[80];
     snprintf(ev, sizeof(ev),
-             "TIMEOUT  -> cwnd=1 ssthresh=%.0f, retransmit %d",
+             "ssthresh=%.0f  cwnd=1  retransmit seg=%d",
              s->ssthresh, s->snd_una);
     log_line(s, ev);
     return 1;
@@ -123,38 +131,36 @@ int tcp_sender_on_ack(tcp_sender_t *s, int ack, int *retx_seq_out) {
     if (retx_seq_out) *retx_seq_out = -1;
 
     if (ack <= s->snd_una) {
-        /* Duplicate (cumulative) ACK. */
         s->dup_acks++;
 
         if (s->state != TCP_FR && s->dup_acks == 3) {
-            /* Fast retransmit + enter fast recovery. */
             s->ssthresh = (s->cwnd / 2.0 < 2.0) ? 2.0 : (s->cwnd / 2.0);
             s->cwnd     = s->ssthresh + 3.0;
             s->recover  = s->snd_nxt - 1;
             s->state    = TCP_FR;
 
+            banner("3 DUP ACKs  ->  FAST RETRANSMIT + enter FAST RECOVERY");
             char ev[96];
             snprintf(ev, sizeof(ev),
-                     "DUPACK x3 ack=%d -> FR ssthresh=%.0f cwnd=%.2f "
-                     "recover=%d, retx %d",
-                     ack, s->ssthresh, s->cwnd, s->recover, s->snd_una);
+                     "ssthresh=%.0f  cwnd=%.0f  recover=%d  retransmit seg=%d",
+                     s->ssthresh, s->cwnd, s->recover, s->snd_una);
             log_line(s, ev);
 
             if (retx_seq_out) *retx_seq_out = s->snd_una;
-            s->send_time_ms[s->snd_una] = s->send_time_ms[s->snd_una];
             return 1;
         }
 
         if (s->state == TCP_FR) {
-            /* Window inflation: each extra dupACK lets one more new seg out. */
             s->cwnd += 1.0;
             char ev[64];
-            snprintf(ev, sizeof(ev), "DUPACK ack=%d (FR inflate)", ack);
+            snprintf(ev, sizeof(ev),
+                     "dup ACK ack=%d  (FR window inflate)  cwnd=%.0f",
+                     ack, s->cwnd);
             log_line(s, ev);
         } else {
             char ev[64];
             snprintf(ev, sizeof(ev),
-                     "DUPACK ack=%d (#%d)", ack, s->dup_acks);
+                     "dup ACK ack=%d  (%d of 3 needed)", ack, s->dup_acks);
             log_line(s, ev);
         }
         return 0;
@@ -162,30 +168,31 @@ int tcp_sender_on_ack(tcp_sender_t *s, int ack, int *retx_seq_out) {
 
     /* New cumulative ACK. */
     int newly_acked = ack - s->snd_una;
-    s->snd_una      = ack;
-    s->acked_pkts  += newly_acked;
-    s->dup_acks     = 0;
+    s->snd_una     = ack;
+    s->acked_pkts += newly_acked;
+    s->dup_acks    = 0;
 
     if (s->state == TCP_FR) {
         if (ack > s->recover) {
-            /* Full ACK: leave fast recovery. */
             s->cwnd  = s->ssthresh;
             s->state = TCP_CA;
+            banner("FULL ACK  ->  Exit Fast Recovery,  enter Congestion Avoidance");
             char ev[80];
             snprintf(ev, sizeof(ev),
-                     "ACK ack=%d FULL -> exit FR, cwnd=%.2f", ack, s->cwnd);
+                     "ack=%d > recover=%d  cwnd=ssthresh=%.0f",
+                     ack, s->recover, s->cwnd);
             log_line(s, ev);
         } else {
-            /* Partial ACK: retransmit the new snd_una, deflate, stay in FR.
-               This is the NewReno-specific behavior. */
+            /* Partial ACK: NewReno-specific — stay in FR, retransmit next gap. */
             double deflate = (double)newly_acked - 1.0;
             if (deflate < 0) deflate = 0;
             s->cwnd -= deflate;
             if (s->cwnd < 1.0) s->cwnd = 1.0;
 
+            banner("PARTIAL ACK (NewReno)  ->  stay in FR, retransmit next gap");
             char ev[96];
             snprintf(ev, sizeof(ev),
-                     "ACK ack=%d PARTIAL (recover=%d) -> retx %d, cwnd=%.2f",
+                     "ack=%d still < recover=%d  retransmit seg=%d  cwnd=%.0f",
                      ack, s->recover, ack, s->cwnd);
             log_line(s, ev);
 
@@ -196,22 +203,23 @@ int tcp_sender_on_ack(tcp_sender_t *s, int ack, int *retx_seq_out) {
         s->cwnd += (double)newly_acked;
         if (s->cwnd >= s->ssthresh) {
             s->state = TCP_CA;
+            banner("SLOW START -> CONGESTION AVOIDANCE  (cwnd hit ssthresh)");
             char ev[80];
             snprintf(ev, sizeof(ev),
-                     "ACK ack=%d -> SS->CA, cwnd=%.2f ssthresh=%.0f",
+                     "ack=%d  cwnd=%.2f  ssthresh=%.0f  now growing linearly",
                      ack, s->cwnd, s->ssthresh);
             log_line(s, ev);
         } else {
-            char ev[64];
+            char ev[48];
             snprintf(ev, sizeof(ev),
-                     "ACK ack=%d (SS) cwnd=%.2f", ack, s->cwnd);
+                     "ACK ack=%d  [SS]  cwnd=%.2f", ack, s->cwnd);
             log_line(s, ev);
         }
     } else { /* TCP_CA */
         s->cwnd += (double)newly_acked / s->cwnd;
-        char ev[64];
+        char ev[48];
         snprintf(ev, sizeof(ev),
-                 "ACK ack=%d (CA) cwnd=%.2f", ack, s->cwnd);
+                 "ACK ack=%d  [CA]  cwnd=%.2f", ack, s->cwnd);
         log_line(s, ev);
     }
     return 0;
@@ -235,9 +243,8 @@ int tcp_receiver_on_data(tcp_receiver_t *r, const char *src, int seq) {
         r->rcv_next = 1;
     }
 
-    if (seq < 1 || seq >= TCP_MAX_SEGS) {
+    if (seq < 1 || seq >= TCP_MAX_SEGS)
         return r->rcv_next;
-    }
 
     if (seq == r->rcv_next) {
         r->rcv_next++;
@@ -248,6 +255,5 @@ int tcp_receiver_on_data(tcp_receiver_t *r, const char *src, int seq) {
     } else if (seq > r->rcv_next) {
         r->buf[seq] = 1;
     }
-    /* If seq < rcv_next we've already delivered it; just re-ack. */
     return r->rcv_next;
 }
