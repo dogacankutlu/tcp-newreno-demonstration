@@ -157,7 +157,7 @@ int main(int argc, char **argv) {
 
     long start_ms       = now_ms();
     long last_lsa_ms    = 0;
-    long lsa_period_ms  = 500;        /* keep refreshing so late joiners learn the topology */
+    long lsa_period_ms  = 300;        /* aggressive flood so simultaneous starts all converge */
     int  converged      = 0;
     int  stdin_open     = 1;
 
@@ -193,7 +193,7 @@ int main(int argc, char **argv) {
             last_lsa_ms = t;
         }
 
-        if (!converged && t - start_ms >= 3000) {
+        if (!converged && t - start_ms >= 5000) {
             routing_recompute(router);
             routing_print_table(router);
             converged = 1;
@@ -228,10 +228,14 @@ int main(int argc, char **argv) {
             if (n > 0) {
                 if (strncmp(buf, "LSA|", 4) == 0) {
                     int changed = routing_handle_lsa(router, buf);
-                    /* Always forward unseen LSAs (split-horizon). */
                     if (changed) {
                         routing_forward_lsa(router, sock, buf,
                                             from_host, from_port);
+                        /* Re-advertise ourselves so the new node learns
+                           about us immediately rather than waiting for
+                           the next scheduled flood tick. */
+                        routing_advertise(router, sock);
+                        last_lsa_ms = t;
                         if (converged) routing_recompute(router);
                     }
                 } else if (strncmp(buf, "DATA|", 5) == 0) {
