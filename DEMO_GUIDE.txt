@@ -1,0 +1,191 @@
+================================================================================
+            CSE 320  -  TCP NewReno  -  Demonstration Guide
+================================================================================
+
+This is the script to read aloud while recording the demonstration video.
+Each section says (a) what to do on screen, and (b) the words to say.
+Aim for ~5 minutes of recording total.
+
+Folder:    Computer Networks TCP New Reno Assignment/
+Binary:    ./node      (built by `make`)
+Configs:   configs/A.conf .. configs/F.conf
+
+Algorithm: TCP NewReno, selected because (sum of student IDs) mod 3 = 2.
+
+--------------------------------------------------------------------------------
+SECTION 1  -  SETUP                                            (~30 seconds)
+--------------------------------------------------------------------------------
+
+Do on screen:
+    1. Open a terminal in the project folder.
+    2. Run:    make clean && make
+    3. Open SIX terminal tabs side by side (or split a tmux window 6 ways).
+
+Say:
+    "This is my CSE 320 congestion-control assignment. Because the sum of
+     our student IDs modulo three is two, the algorithm we have to
+     implement is TCP NewReno. The whole project is one C executable
+     called 'node'. Each of the six terminals is going to run one node of
+     the topology - A through F - on a different UDP port."
+
+--------------------------------------------------------------------------------
+SECTION 2  -  ROUTING CONVERGENCE                              (~60 seconds)
+--------------------------------------------------------------------------------
+
+Do on screen, one command per tab:
+        Tab 1:  ./node configs/A.conf
+        Tab 2:  ./node configs/B.conf
+        Tab 3:  ./node configs/C.conf
+        Tab 4:  ./node configs/D.conf
+        Tab 5:  ./node configs/E.conf
+        Tab 6:  ./node configs/F.conf
+
+    Wait about three seconds. Each tab will print its routing table.
+
+Say while pointing at node A's tab:
+    "Each node only knows its direct neighbors from its config file. They
+     flood link-state advertisements to their neighbors, and within a few
+     seconds everyone has a complete view of the topology. Each node
+     then runs Dijkstra to build a routing table."
+
+    "Look at A's table. The direct A-to-D link costs thirteen, but the
+     path A-B-D only costs twelve, so the next hop from A to D is B, not
+     D. That's exactly what the assignment specifies."
+
+--------------------------------------------------------------------------------
+SECTION 3  -  PLAIN FORWARDING DEMO                            (~45 seconds)
+--------------------------------------------------------------------------------
+
+In the tab for node A, type:
+        send D hello_from_A_to_D
+
+Expected output across the three tabs:
+        [A] Destination D, next hop B
+        [B] Forwarding message from A to D, next hop D
+        [D] Received message from A: hello_from_A_to_D
+
+Say:
+    "I'm sending a message from A to D. A looks up the route - next hop B.
+     B receives it, looks up its own route to D, forwards it directly.
+     D delivers it. This is the routing layer working end to end."
+
+In the tab for node F, type:
+        send E hello_from_F_to_E
+
+Expected output:
+        [F] Destination E, next hop A
+        [A] Forwarding message from F to E, next hop B
+        [B] Forwarding message from F to E, next hop E
+        [E] Received message from F: hello_from_F_to_E
+
+Say:
+    "Three hops this time - F to A to B to E - again exactly matching the
+     assignment's expected output."
+
+--------------------------------------------------------------------------------
+SECTION 4  -  NEWRENO BASELINE: SLOW START + CONGESTION AVOIDANCE  (~60 s)
+--------------------------------------------------------------------------------
+
+In the tab for node A, type:
+        tcp D 20
+
+Watch the trace lines scroll. Each line shows:
+        cwnd, ssthresh, state (SS/CA/FR), snd_una, snd_nxt, dup_acks, event
+
+Say while it's running:
+    "This is a clean transfer of twenty segments from A to D. cwnd starts
+     at one. In slow start we add one MSS per new ACK, so cwnd doubles
+     every round trip - one, two, four, eight... Once cwnd hits ssthresh,
+     which is sixteen, we transition into congestion avoidance, and cwnd
+     grows by only one over cwnd per ACK - that's the linear ramp."
+
+Point at the SS->CA transition line in the output, then at the slower
+linear increments after it.
+
+--------------------------------------------------------------------------------
+SECTION 5  -  TRIPLE-DUPLICATE-ACK + FAST RECOVERY + PARTIAL ACK   (~120 s)
+        *** This is the centrepiece of the demo. ***
+--------------------------------------------------------------------------------
+
+In the tab for node A, type:
+        tcp D 25 drop 8 9 10
+
+Say while it runs:
+    "Now I'm telling the sender to drop segments eight, nine, and ten on
+     their first transmission. This simulates a burst loss in the network."
+
+Point at the lines marked '(DROPPED for demo)':
+    "There go segments eight, nine, ten - never actually transmitted to
+     the next hop."
+
+Point at the DUPACK lines:
+    "The receiver got eleven, twelve, thirteen out of order. Each of those
+     made it send another ACK for seven, which the sender sees as a
+     duplicate ACK."
+
+Point at the 'DUPACK x3 -> FR' line:
+    "Three duplicates in a row triggers fast retransmit. ssthresh halves -
+     it drops to four - cwnd jumps to ssthresh plus three, the sender
+     retransmits segment eight, and we enter Fast Recovery. The 'recover'
+     value is set to fifteen - the highest segment we'd already sent."
+
+Point at the 'ACK ack=9 PARTIAL' line:
+    "Now this is the part that makes NewReno different from plain Reno.
+     The receiver got eight, advanced its rcv_next to nine, but nine was
+     also lost. So it sends back ACK nine. Plain Reno would treat this as
+     a normal new ACK, exit Fast Recovery and cwnd would deflate. But
+     NewReno knows we haven't reached 'recover' yet, so this is a partial
+     ACK - it retransmits nine, deflates cwnd a bit, and STAYS in Fast
+     Recovery."
+
+Point at the second 'PARTIAL' line:
+    "Same thing for ten."
+
+Point at the 'FULL -> exit FR' line:
+    "Once the cumulative ACK passes 'recover' - here it's nineteen - we
+     finally leave Fast Recovery. cwnd is set to ssthresh, which is four,
+     and we're back in congestion avoidance. The transfer finishes
+     normally from there. Notice we recovered three losses without ever
+     restarting slow start - that's the whole point of NewReno."
+
+--------------------------------------------------------------------------------
+SECTION 6  -  TIMEOUT SCENARIO                                 (~45 seconds)
+--------------------------------------------------------------------------------
+
+In the tab for node A, type:
+        tcp D 15 timeout
+
+Say:
+    "This time I'm telling the sender to drop segment one. Because cwnd
+     is one when seq one goes out, there's no other data in flight, so
+     the receiver can never produce duplicate ACKs. The only way the
+     sender can detect the loss is the retransmit timer firing."
+
+Wait roughly one second (the RTO is 800 ms).
+
+Point at the 'TIMEOUT' line:
+    "There's the timeout. cwnd collapses to one, ssthresh is set to half
+     of what it was - clamped to two - and we're back in slow start.
+     The sender retransmits seq one, and from there the connection
+     re-grows normally - through SS into CA. This is the classic
+     timeout-driven recovery, the same as Reno and Tahoe would do."
+
+--------------------------------------------------------------------------------
+SECTION 7  -  WRAP                                             (~20 seconds)
+--------------------------------------------------------------------------------
+
+In every tab, type:
+        quit
+
+Say:
+    "To recap: I implemented TCP NewReno on top of a six-node UDP overlay
+     with link-state routing. The demo just showed slow start, congestion
+     avoidance, fast retransmit, fast recovery, NewReno's partial-ACK
+     handling, and a timeout. Source code, README, and configs are all in
+     the submitted folder. Thanks."
+
+Stop the recording.
+
+================================================================================
+                              END OF SCRIPT
+================================================================================
