@@ -237,7 +237,11 @@ void tcp_receiver_reset(tcp_receiver_t *r) {
 }
 
 int tcp_receiver_on_data(tcp_receiver_t *r, const char *src, int seq) {
-    if (!r->active) {
+    /* A fresh transfer always starts at seq=1. If we see seq=1 from a sender
+       whose previous transfer already finished, wipe the buffer so we don't
+       carry rcv_next over from the last run. */
+    if (!r->active || seq == 1) {
+        memset(r->buf, 0, sizeof(r->buf));
         r->active = 1;
         snprintf(r->src, sizeof(r->src), "%s", src);
         r->rcv_next = 1;
