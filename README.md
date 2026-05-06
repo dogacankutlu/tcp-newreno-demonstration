@@ -1,6 +1,6 @@
 # TCP NewReno — CSE 320 Assignment
 
-Implementation of TCP NewReno congestion control over a simulated six-node UDP network. Algorithm selected by (student id) mod 3 = 2.
+Implementation of TCP NewReno congestion control over a simulated six-node UDP network.
 
 Six nodes (A–F) run as separate processes on localhost ports 5001–5006. They exchange link-state advertisements, each builds a routing table with Dijkstra, and the TCP layer on top simulates NewReno congestion control with slow start, congestion avoidance, fast retransmit, fast recovery with partial ACK handling, and timeout.
 
