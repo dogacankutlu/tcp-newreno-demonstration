@@ -272,7 +272,16 @@ int main(int argc, char **argv) {
                             }
                         }
                     } else if (strcmp(kind, "DATA") == 0) {
+                        int prev_next = tcp_r.rcv_next;
                         int ack = tcp_receiver_on_data(&tcp_r, src, seq);
+                        if (seq == ack - 1 || (seq == 1 && prev_next != 1)) {
+                            printf("[%s] RX seg=%-3d from %s  -> ACK %d (in order)\n",
+                                   routing_self_name(router), seq, src, ack);
+                        } else if (seq >= ack) {
+                            printf("[%s] RX seg=%-3d from %s  -> ACK %d (out of order, gap at %d)\n",
+                                   routing_self_name(router), seq, src, ack, ack);
+                        }
+                        fflush(stdout);
                         /* Send ACK back to src. */
                         const route_t *rt = routing_lookup(router, src);
                         if (rt) {
